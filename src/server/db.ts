@@ -315,9 +315,19 @@ function ensureSchema(db: Database.Database) {
 
 export function getDb() {
   if (!dbSingleton) {
-    const db = new Database(getDbFilePath());
-    ensureSchema(db);
-    dbSingleton = db;
+    const dbFilePath = getDbFilePath();
+    try {
+      const db = new Database(dbFilePath);
+      ensureSchema(db);
+      dbSingleton = db;
+    } catch (e) {
+      console.error(
+        "[greenbook] Failed to open SQLite. Check GREENBOOK_DATA_DIR, disk mount, and permissions. Path:",
+        dbFilePath,
+        e,
+      );
+      throw e;
+    }
   }
 
   return dbSingleton;
