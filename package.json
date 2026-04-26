@@ -9,7 +9,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "npm rebuild better-sqlite3"
   },
   "dependencies": {
     "@mantine/core": "^9.1.0",

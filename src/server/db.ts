@@ -1,9 +1,17 @@
-import Database from "better-sqlite3";
+import type { default as SqliteDatabaseCtor } from "better-sqlite3";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
-let dbSingleton: Database.Database | undefined;
+/** Load at runtime from `node_modules` so Next’s server bundler (Turbopack) does not N‑API‑break the addon. */
+const requireFromAppRoot = createRequire(path.join(process.cwd(), "package.json"));
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const Database = requireFromAppRoot("better-sqlite3") as typeof SqliteDatabaseCtor;
+
+type SqliteDatabase = InstanceType<typeof SqliteDatabaseCtor>;
+
+let dbSingleton: SqliteDatabase | undefined;
 
 function getDbFilePath() {
   const fromEnv = process.env.GREENBOOK_DATA_DIR?.trim() || process.env.DATA_DIR?.trim();
@@ -15,7 +23,7 @@ function getDbFilePath() {
   return dbFilePath;
 }
 
-function hasColumn(db: Database.Database, table: string, column: string) {
+function hasColumn(db: SqliteDatabase, table: string, column: string) {
   const columns = db
     .prepare("SELECT name FROM pragma_table_info(?)")
     .all(table) as Array<{ name: string }>;
@@ -23,7 +31,7 @@ function hasColumn(db: Database.Database, table: string, column: string) {
   return columns.some((c) => c.name === column);
 }
 
-function ensureSchema(db: Database.Database) {
+function ensureSchema(db: SqliteDatabase) {
   db.exec(`
     PRAGMA foreign_keys = ON;
     PRAGMA journal_mode = WAL;
