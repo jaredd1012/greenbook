@@ -6,8 +6,8 @@ import path from "node:path";
 let dbSingleton: Database.Database | undefined;
 
 function getDbFilePath() {
-  const root = process.cwd();
-  const dataDir = path.join(root, "data");
+  const fromEnv = process.env.GREENBOOK_DATA_DIR?.trim() || process.env.DATA_DIR?.trim();
+  const dataDir = fromEnv ? fromEnv : path.join(process.cwd(), "data");
   const dbFilePath = path.join(dataDir, "greenbook.sqlite");
 
   fs.mkdirSync(dataDir, { recursive: true });

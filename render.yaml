@@ -1,0 +1,21 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Requires a paid instance type to attach a persistent disk (SQLite survives deploys).
+# Set region/plan in the dashboard when creating, or adjust below.
+services:
+  - type: web
+    name: greenbook
+    runtime: node
+    region: oregon
+    plan: starter
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: GREENBOOK_DATA_DIR
+        value: /var/greenbook-data
+    disk:
+      name: greenbook-sqlite
+      mountPath: /var/greenbook-data
+      sizeGB: 1

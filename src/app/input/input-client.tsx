@@ -12,6 +12,7 @@ import {
   Modal,
   Progress,
   Select,
+  SegmentedControl,
   SimpleGrid,
   Stack,
   Table,
@@ -23,6 +24,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+
+import { DEFAULT_DOLLARS_PER_POINT, futuresPnlFromPrices } from "@/lib/futuresPnl";
 
 const MORTGAGE_ACCOUNT = "Mortgage";
 
@@ -118,6 +121,29 @@ async function fetchTrades(rawLogId: number) {
   const res = await fetch(`/api/trades?rawLogId=${encodeURIComponent(String(rawLogId))}`, { method: "GET" });
   if (!res.ok) throw new Error("Failed to fetch trades");
   return (await res.json()) as { trades: TradeDto[] };
+}
+
+async function postManualTrade(input: {
+  account: string;
+  closePrice: number;
+  closedAt: string;
+  dollarsPerPoint: number;
+  openPrice: number;
+  openedAt: string;
+  qty: number;
+  side: "LONG" | "SHORT";
+  symbol: string;
+}) {
+  const res = await fetch("/api/trades", {
+    body: JSON.stringify(input),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as null | { error?: string };
+    throw new Error(data?.error ?? "Failed to add trade");
+  }
+  return (await res.json()) as { ok: true; rawLogId: number; tradeId: number };
 }
 
 async function postAccount(name: string) {
@@ -219,7 +245,16 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
   const [closeRowId, setCloseRowId] = useState<null | number>(null);
   const [contract, setContract] = useState("");
   const [contractsYesNo, setContractsYesNo] = useState<null | string>(null);
+  const [futuresInputMode, setFuturesInputMode] = useState<"manual" | "paste">("paste");
   const [lastResult, setLastResult] = useState<IngestResult | null>(null);
+  const [manualClosePrice, setManualClosePrice] = useState("");
+  const [manualClosedAt, setManualClosedAt] = useState("");
+  const [manualDollarsPerPoint, setManualDollarsPerPoint] = useState(String(DEFAULT_DOLLARS_PER_POINT));
+  const [manualOpenPrice, setManualOpenPrice] = useState("");
+  const [manualOpenedAt, setManualOpenedAt] = useState("");
+  const [manualQty, setManualQty] = useState("");
+  const [manualSide, setManualSide] = useState<"LONG" | "SHORT">("LONG");
+  const [manualSymbol, setManualSymbol] = useState("");
   const [oneShotExit, setOneShotExit] = useState("");
   const [oneShotSell, setOneShotSell] = useState("");
   const [rawText, setRawText] = useState("");
@@ -263,6 +298,14 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
       if (data.created) {
         setAccount(data.name);
         setLastResult(null);
+        setManualClosePrice("");
+        setManualClosedAt("");
+        setManualOpenPrice("");
+        setManualOpenedAt("");
+        setManualDollarsPerPoint(String(DEFAULT_DOLLARS_PER_POINT));
+        setManualQty("");
+        setManualSide("LONG");
+        setManualSymbol("");
         setRawText("");
       }
     },
@@ -316,6 +359,31 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
     },
   });
 
+  const manualTradeMutation = useMutation({
+    mutationFn: postManualTrade,
+    onSuccess: async (data, variables) => {
+      setLastResult({
+        account: variables.account,
+        createdAt: new Date().toISOString(),
+        duplicate: false,
+        rawLogId: data.rawLogId,
+        tradeInsertedCount: 1,
+        tradeRequestedCount: 1,
+        tradeSkippedCount: 0,
+      });
+      setManualClosePrice("");
+      setManualClosedAt("");
+      setManualOpenPrice("");
+      setManualOpenedAt("");
+      setManualDollarsPerPoint(String(DEFAULT_DOLLARS_PER_POINT));
+      setManualQty("");
+      setManualSide("LONG");
+      setManualSymbol("");
+      await queryClient.invalidateQueries({ queryKey: ["ingest-events"] });
+      await queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
+  });
+
   useEffect(() => {
     if (!lastResult) return;
     const timeout = window.setTimeout(() => setLastResult(null), 8000);
@@ -325,6 +393,14 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
   const pickAccount = (name: string) => {
     setAccount(name);
     setLastResult(null);
+    setManualClosePrice("");
+    setManualClosedAt("");
+    setManualOpenPrice("");
+    setManualOpenedAt("");
+    setManualDollarsPerPoint(String(DEFAULT_DOLLARS_PER_POINT));
+    setManualQty("");
+    setManualSide("LONG");
+    setManualSymbol("");
     setRawText("");
   };
 
@@ -332,6 +408,28 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
 
   const trades = tradesQuery.data?.trades ?? [];
   const pnlTotal = trades.reduce((sum, t) => sum + (Number.isFinite(t.pnl) ? t.pnl : 0), 0);
+
+  const derivedManualPnl = useMemo(() => {
+    if (isMortgage) {
+      return null;
+    }
+    const o = Number(manualOpenPrice);
+    const c = Number(manualClosePrice);
+    const q = Number(manualQty);
+    const d = Number(manualDollarsPerPoint);
+    if (
+      !Number.isFinite(o) ||
+      !Number.isFinite(c) ||
+      !Number.isFinite(q) ||
+      !Number.isInteger(q) ||
+      q <= 0 ||
+      !Number.isFinite(d) ||
+      d <= 0
+    ) {
+      return null;
+    }
+    return futuresPnlFromPrices(manualSide, o, c, q, d);
+  }, [isMortgage, manualClosePrice, manualDollarsPerPoint, manualOpenPrice, manualQty, manualSide]);
 
   const optionsTradesDisplay = useMemo(() => {
     const list = optionsTradesQuery.data?.trades ?? [];
@@ -369,7 +467,7 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
         <Text c="dimmed" mt={4} size="sm">
           {isMortgage
             ? "Manual options log for the Mortgage account. Monthly goal: $3,000."
-            : "Paste raw futures logs. You’ll see which were added vs rejected as duplicates."}
+            : "Paste a raw log to parse, or add a single futures trade manually. Parsed ingests show duplicate handling; manual entry skips the log."}
         </Text>
       </div>
 
@@ -765,52 +863,197 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
         <Grid>
           <Grid.Col span={{ base: 12, md: 6 }}>
             <Card withBorder padding="md" radius="lg" shadow="sm">
-              <Group justify="space-between" mb="sm">
-                <Text c="dimmed" fw={600} size="xs">
-                  Raw log
-                </Text>
-                <Button disabled={!rawText} onClick={() => setRawText("")} size="xs" variant="subtle">
-                  Clear
-                </Button>
-              </Group>
-
-              <Textarea
-                autosize
-                label="Raw text"
-                minRows={14}
-                onChange={(e) => setRawText(e.currentTarget.value)}
-                placeholder="Paste the raw trade log text here…"
-                value={rawText}
-              />
-
-              <Group mt="md">
-                <Button
-                  disabled={!selectedAccount || !rawText.trim() || ingestMutation.isPending}
-                  onClick={() => ingestMutation.mutate({ account: selectedAccount, rawText })}
-                >
-                  {ingestMutation.isPending ? "Saving…" : "Parse & save"}
-                </Button>
-
-                {ingestMutation.isError ? (
-                  <Text c="red" size="sm">
-                    {ingestMutation.error.message}
-                  </Text>
-                ) : null}
-
-                {ingestMutation.isSuccess ? (
-                  <Text
-                    c={ingestMutation.data.duplicate || ingestMutation.data.tradeSkippedCount > 0 ? "yellow" : "dimmed"}
-                    size="sm"
-                  >
-                    {ingestMutation.data.duplicate ? "Rejected (duplicate raw log)." : "Added."} Inserted{" "}
-                    {ingestMutation.data.tradeInsertedCount}/{ingestMutation.data.tradeRequestedCount} trades
-                    {ingestMutation.data.tradeSkippedCount > 0
-                      ? ` (skipped ${ingestMutation.data.tradeSkippedCount} duplicates)`
-                      : ""}
-                    .
-                  </Text>
+              <Group align="center" justify="space-between" mb="md" wrap="wrap">
+                <SegmentedControl
+                  data={[
+                    { label: "Paste log", value: "paste" },
+                    { label: "Manual entry", value: "manual" },
+                  ]}
+                  onChange={(v) => setFuturesInputMode(v as "manual" | "paste")}
+                  value={futuresInputMode}
+                />
+                {futuresInputMode === "paste" ? (
+                  <Button disabled={!rawText} onClick={() => setRawText("")} size="xs" variant="subtle">
+                    Clear
+                  </Button>
                 ) : null}
               </Group>
+
+              {futuresInputMode === "paste" ? (
+                <>
+                  <Text c="dimmed" fw={600} mb="xs" size="xs">
+                    Raw log
+                  </Text>
+                  <Textarea
+                    autosize
+                    label="Raw text"
+                    minRows={14}
+                    onChange={(e) => setRawText(e.currentTarget.value)}
+                    placeholder="Paste the raw trade log text here…"
+                    value={rawText}
+                  />
+
+                  <Group mt="md">
+                    <Button
+                      disabled={!selectedAccount || !rawText.trim() || ingestMutation.isPending}
+                      onClick={() => ingestMutation.mutate({ account: selectedAccount, rawText })}
+                    >
+                      {ingestMutation.isPending ? "Saving…" : "Parse & save"}
+                    </Button>
+
+                    {ingestMutation.isError ? (
+                      <Text c="red" size="sm">
+                        {ingestMutation.error.message}
+                      </Text>
+                    ) : null}
+
+                    {ingestMutation.isSuccess ? (
+                      <Text
+                        c={ingestMutation.data.duplicate || ingestMutation.data.tradeSkippedCount > 0 ? "yellow" : "dimmed"}
+                        size="sm"
+                      >
+                        {ingestMutation.data.duplicate ? "Rejected (duplicate raw log)." : "Added."} Inserted{" "}
+                        {ingestMutation.data.tradeInsertedCount}/{ingestMutation.data.tradeRequestedCount} trades
+                        {ingestMutation.data.tradeSkippedCount > 0
+                          ? ` (skipped ${ingestMutation.data.tradeSkippedCount} duplicates)`
+                          : ""}
+                        .
+                      </Text>
+                    ) : null}
+                  </Group>
+                </>
+              ) : (
+                <Stack gap="sm">
+                  <Text c="dimmed" size="sm">
+                    PnL = (favorable price move in index points) × qty × dollars per point. Adjust dollars/point to match
+                    your product (e.g. ES 50, NQ 20, MES 5).
+                  </Text>
+                  <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
+                    <TextInput
+                      label="Symbol"
+                      onChange={(e) => setManualSymbol(e.currentTarget.value)}
+                      placeholder="e.g. ESZ5"
+                      value={manualSymbol}
+                    />
+                    <Select
+                      data={[
+                        { label: "LONG", value: "LONG" },
+                        { label: "SHORT", value: "SHORT" },
+                      ]}
+                      label="Side"
+                      onChange={(v) => v && setManualSide(v as "LONG" | "SHORT")}
+                      value={manualSide}
+                    />
+                    <TextInput
+                      inputMode="numeric"
+                      label="Qty (contracts)"
+                      onChange={(e) => setManualQty(e.currentTarget.value)}
+                      placeholder="1"
+                      value={manualQty}
+                    />
+                    <TextInput
+                      inputMode="decimal"
+                      label="Dollars per point"
+                      onChange={(e) => setManualDollarsPerPoint(e.currentTarget.value)}
+                      placeholder="50"
+                      value={manualDollarsPerPoint}
+                    />
+                    <TextInput
+                      inputMode="decimal"
+                      label="Open price"
+                      onChange={(e) => setManualOpenPrice(e.currentTarget.value)}
+                      placeholder="0.00"
+                      value={manualOpenPrice}
+                    />
+                    <TextInput
+                      inputMode="decimal"
+                      label="Close price"
+                      onChange={(e) => setManualClosePrice(e.currentTarget.value)}
+                      placeholder="0.00"
+                      value={manualClosePrice}
+                    />
+                    <TextInput
+                      label="Opened (local)"
+                      onChange={(e) => setManualOpenedAt(e.currentTarget.value)}
+                      type="datetime-local"
+                      value={manualOpenedAt}
+                    />
+                    <TextInput
+                      label="Closed (local)"
+                      onChange={(e) => setManualClosedAt(e.currentTarget.value)}
+                      type="datetime-local"
+                      value={manualClosedAt}
+                    />
+                  </SimpleGrid>
+                  <Text size="sm">
+                    <Text component="span" c="dimmed">
+                      Derived PnL:{" "}
+                    </Text>
+                    <Text
+                      component="span"
+                      c={derivedManualPnl === null ? "dimmed" : derivedManualPnl >= 0 ? "green" : "red"}
+                      fw={700}
+                      style={{ fontVariantNumeric: "tabular-nums" }}
+                    >
+                      {derivedManualPnl === null
+                        ? "—"
+                        : formatMoneyOrDash(derivedManualPnl)}
+                    </Text>
+                  </Text>
+                  <Group mt="xs">
+                    <Button
+                      disabled={
+                        !selectedAccount || derivedManualPnl === null || manualTradeMutation.isPending
+                      }
+                      loading={manualTradeMutation.isPending}
+                      onClick={() => {
+                        if (!selectedAccount || derivedManualPnl === null) return;
+                        const qtyN = Number(manualQty);
+                        const o = Number(manualOpenPrice);
+                        const c = Number(manualClosePrice);
+                        const dpp = Number(manualDollarsPerPoint);
+                        if (
+                          !manualSymbol.trim() ||
+                          !Number.isFinite(dpp) ||
+                          dpp <= 0 ||
+                          !Number.isFinite(qtyN) ||
+                          !Number.isInteger(qtyN) ||
+                          qtyN <= 0 ||
+                          !Number.isFinite(o) ||
+                          !Number.isFinite(c) ||
+                          !manualOpenedAt ||
+                          !manualClosedAt
+                        ) {
+                          return;
+                        }
+                        const openedAt = new Date(manualOpenedAt);
+                        const closedAt = new Date(manualClosedAt);
+                        if (Number.isNaN(openedAt.getTime()) || Number.isNaN(closedAt.getTime()) || closedAt < openedAt) {
+                          return;
+                        }
+                        manualTradeMutation.mutate({
+                          account: selectedAccount,
+                          closePrice: c,
+                          closedAt: closedAt.toISOString(),
+                          dollarsPerPoint: dpp,
+                          openPrice: o,
+                          openedAt: openedAt.toISOString(),
+                          qty: qtyN,
+                          side: manualSide,
+                          symbol: manualSymbol.trim(),
+                        });
+                      }}
+                    >
+                      Add trade
+                    </Button>
+                    {manualTradeMutation.isError ? (
+                      <Text c="red" size="sm">
+                        {manualTradeMutation.error.message}
+                      </Text>
+                    ) : null}
+                  </Group>
+                </Stack>
+              )}
 
               {lastResult ? (
                 <Alert
@@ -819,7 +1062,7 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
                   title={
                     <Group justify="space-between" wrap="nowrap">
                       <Text fw={600} size="sm">
-                        {lastResult.duplicate ? "Rejected" : "Added"} • {lastResult.account} • Raw log #{lastResult.rawLogId}
+                        {lastResult.duplicate ? "Rejected" : "Added"} • {lastResult.account} • Log #{lastResult.rawLogId}
                       </Text>
                       <Badge color={lastResult.duplicate ? "yellow" : "green"} variant="light">
                         {lastResult.duplicate ? "duplicate" : "added"}
@@ -860,7 +1103,9 @@ export default function InputClient({ urlAccount: urlAccountFromServer = "" }: {
                 </Alert>
               ) : null}
 
-              {!lastResult ? <Text c="dimmed">Paste a log to see its trades here.</Text> : null}
+              {!lastResult ? (
+                <Text c="dimmed">Parse a log or add a trade manually to see it here.</Text>
+              ) : null}
 
               {lastResult && !tradesQuery.isLoading && trades.length === 0 ? (
                 <Text c="dimmed">No trades for raw log #{lastResult.rawLogId}.</Text>
