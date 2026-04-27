@@ -6,6 +6,7 @@ import {
   Button,
   Card,
   Group,
+  Modal,
   SimpleGrid,
   Stack,
   Table,
@@ -13,8 +14,10 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
+import { useDisclosure } from "@mantine/hooks";
+import { showNotification } from "@mantine/notifications";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 
 type AccountConfigDto = {
@@ -77,6 +80,15 @@ async function postLedgerEntry(accountId: string, amount: number, note: string, 
   return (await res.json()) as { id: number; ok: true };
 }
 
+async function deleteAccount(accountId: string) {
+  const res = await fetch(`/api/accounts/${encodeURIComponent(accountId)}`, { method: "DELETE" });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as null | { error?: string };
+    throw new Error(data?.error ?? "Failed to delete account");
+  }
+  return (await res.json()) as { ok: true };
+}
+
 async function putWithdrawCriteria(
   accountId: string,
   criteria: {
@@ -112,7 +124,9 @@ function formatMoney(value: number) {
 export default function AccountConfigPage() {
   const queryClient = useQueryClient();
   const params = useParams<{ accountId: string }>();
+  const router = useRouter();
   const accountId = params.accountId;
+  const [deleteOpened, { close: closeDelete, open: openDelete }] = useDisclosure(false);
 
   const [initialAmount, setInitialAmount] = useState("");
   const [initialNote, setInitialNote] = useState("Starting balance (manual)");
@@ -157,6 +171,21 @@ export default function AccountConfigPage() {
       setWithdrawAmount("");
       setWithdrawNote("");
       await queryClient.invalidateQueries({ queryKey: ["account-config", accountId] });
+    },
+  });
+
+  const deleteAccountMutation = useMutation({
+    mutationFn: () => deleteAccount(accountId),
+    onError: (err: Error) => {
+      showNotification({ color: "red", message: err.message, title: "Delete failed" });
+    },
+    onSuccess: async () => {
+      closeDelete();
+      showNotification({ color: "teal", message: "Account removed.", title: "Deleted" });
+      await queryClient.invalidateQueries({ queryKey: ["accounts"] });
+      await queryClient.invalidateQueries({ queryKey: ["stats", "accounts"] });
+      await queryClient.invalidateQueries({ queryKey: ["stats", "pnl"] });
+      router.push("/accounts");
     },
   });
 
@@ -416,6 +445,59 @@ export default function AccountConfigPage() {
           </Table>
         ) : null}
       </Card>
+
+      {configQuery.data?.account.name && configQuery.data.account.name !== "Mortgage" ? (
+        <Card p="md" radius="lg" withBorder>
+          <Text c="red" fw={700} size="sm">
+            Delete account
+          </Text>
+          <Text c="dimmed" mt="xs" size="sm">
+            Remove this account and all related trades, ingested logs, options data, and balance history.
+          </Text>
+          <Button
+            color="red"
+            loading={deleteAccountMutation.isPending}
+            mt="md"
+            onClick={openDelete}
+            variant="light"
+          >
+            Delete account…
+          </Button>
+        </Card>
+      ) : null}
+
+      <Modal
+        centered
+        onClose={() => {
+          if (!deleteAccountMutation.isPending) {
+            closeDelete();
+          }
+        }}
+        opened={deleteOpened}
+        title="Delete this account?"
+      >
+        <Stack gap="md">
+          <Text size="sm">
+            This will permanently remove <strong>{accountName}</strong> and all related data. This cannot be undone.
+          </Text>
+          <Group justify="flex-end">
+            <Button
+              disabled={deleteAccountMutation.isPending}
+              onClick={closeDelete}
+              variant="default"
+            >
+              Cancel
+            </Button>
+            <Button
+              color="red"
+              loading={deleteAccountMutation.isPending}
+              onClick={() => deleteAccountMutation.mutate()}
+            >
+              Delete account
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
     </Stack>
   );
 }

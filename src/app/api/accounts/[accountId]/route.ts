@@ -246,3 +246,46 @@ export async function PUT(req: Request, context: { params: Promise<{ accountId: 
   return NextResponse.json({ ok: true });
 }
 
+export async function DELETE(_: Request, context: { params: Promise<{ accountId: string }> }) {
+  const { accountId } = await context.params;
+  const id = parseAccountId(accountId);
+  if (!id) {
+    return NextResponse.json({ error: "invalid accountId" }, { status: 400 });
+  }
+
+  let db: ReturnType<typeof getDb>;
+  try {
+    db = getDb();
+  } catch (e) {
+    console.error("DELETE /api/accounts/[id] (getDb)", e);
+    return NextResponse.json({ error: "Database unavailable" }, { status: 500 });
+  }
+
+  const row = db
+    .prepare("SELECT id, name FROM accounts WHERE id = ?")
+    .get(id) as { id: number; name: string } | undefined;
+
+  if (!row) {
+    return NextResponse.json({ error: "account not found" }, { status: 404 });
+  }
+  if (row.name === "Mortgage") {
+    return NextResponse.json({ error: "the Mortgage account cannot be deleted" }, { status: 400 });
+  }
+
+  const name = row.name;
+  try {
+    const run = db.transaction(() => {
+      db.prepare("DELETE FROM ingest_events WHERE account = ?").run(name);
+      db.prepare("DELETE FROM raw_logs WHERE account = ?").run(name);
+      db.prepare("DELETE FROM options_trades WHERE account = ?").run(name);
+      db.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+    });
+    run();
+  } catch (e) {
+    console.error("DELETE /api/accounts/[id] (transaction)", e);
+    return NextResponse.json({ error: "Failed to delete account" }, { status: 500 });
+  }
+
+  return NextResponse.json({ ok: true });
+}
+
